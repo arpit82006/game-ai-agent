@@ -1,0 +1,54 @@
+# ============================================================
+# Ball Sort AI — .gitignore
+# ============================================================
+
+# --- Python ---
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+*.egg
+
+# --- Environment / Secrets ---
+.env
+.env.*
+*.secret
+*.key
+*.pem
+secrets.json
+config.local.*
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Runtime-generated outputs ---
+# Screenshots captured live from ADB at runtime — not test assets
+screenshots/
+
+# Debug output images generated during development
+debug/
+
+# --- OS ---
+ehthumbs.db
+$RECYCLE.BIN/
