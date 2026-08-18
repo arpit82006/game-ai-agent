@@ -22,6 +22,8 @@ COLOR_ABBR = {
     "DARK_PURPLE": "DPU",
     "MAGENTA": "MAG",
     "PINK": "PNK",
+    "GRAY": " ? ",
+    "BLACK": " . ",
 }
 
 

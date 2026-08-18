@@ -16,52 +16,56 @@ def compute_tube_slots(tube):
     Compute vertical slot centers for a single Tube object based strictly
     on that tube's individual geometry (height, width, y-position).
 
-    Tubes stack balls from the bottom under gravity.
-    Each slot accommodates one ball of diameter ~ 0.79 * tube.width.
+    Tubes stack balls vertically under gravity.
+    The aspect ratio (height / width) geometrically determines the tube's
+    capacity (number of balls that fit). For standard Ball Sort tubes:
+      - Aspect ratio ~ 1.95 -> 2 slots
+      - Aspect ratio ~ 2.70 -> 3 slots
+      - Aspect ratio ~ 3.45 -> 4 slots
+      - Aspect ratio ~ 4.20 -> 5 slots
+      - Aspect ratio ~ 4.95 -> 6 slots
 
     Returns:
         list[int]: Y-coordinates of slot centers ordered from top to bottom
                    (Slot 1 = topmost slot, Slot N = bottom slot).
                    The length of this list represents the tube's capacity.
     """
-    ball_diam = tube.width * 0.79
-    pitch = ball_diam
-    bottom_y = tube.y + tube.height - (tube.width * 0.50)
-    min_y = tube.y + (tube.width * 0.55)
+    aspect = tube.height / tube.width if tube.width > 0 else 3.5
+    capacity = max(1, int(round((aspect - 0.45) / 0.75)))
 
-    slots = []
-    k = 0
-    while True:
-        cy = int(round(bottom_y - k * pitch))
-        if cy < min_y:
-            break
-        slots.append(cy)
-        k += 1
+    bottom_y = tube.y + tube.height - (tube.width * 0.48)
+    top_y = tube.y + (tube.width * 0.52)
 
+    if capacity == 1:
+        return [int(round(bottom_y))]
+
+    step = (bottom_y - top_y) / (capacity - 1)
+    slots = [int(round(top_y + k * step)) for k in range(capacity)]
     return sorted(slots)
 
 
-def is_ball_present(image_gray, cx, cy, tube_width):
+def is_ball_present(image, cx, cy, tube_width):
     """
     Determine if a ball is present at a specific slot center (cx, cy).
 
     Distinguishes an opaque 3D ball from transparent glass / wood background:
     - Balls have 3D spherical shading (specular highlight, shading gradient),
-      resulting in high grayscale standard deviation (>= 20.0) and strong
-      horizontal edge energy from Sobel Y (>= 11.5).
-    - Empty tube interiors show the uniform wood background through glass,
-      resulting in low standard deviation (<= 15.0) and low edge energy (<= 8.0).
+      resulting in standard deviation (>= 12.0) and Sobel edge energy (>= 8.5).
+    - Empty tube interiors show the uniform wood background through glass.
+      Empty patches with minor wood shadow gradients are rejected by checking
+      for the wood background hue (H in [5, 15] with V < 200).
 
     Returns:
         bool: True if a ball is present, False otherwise.
     """
-    sample_r = max(6, int(tube_width * 0.25))
-    h, w = image_gray.shape[:2]
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+    sample_r = max(6, int(tube_width * 0.20))
+    h, w = gray.shape[:2]
 
     y1, y2 = max(0, cy - sample_r), min(h, cy + sample_r + 1)
     x1, x2 = max(0, cx - sample_r), min(w, cx + sample_r + 1)
 
-    patch = image_gray[y1:y2, x1:x2]
+    patch = gray[y1:y2, x1:x2]
     if patch.size == 0:
         return False
 
@@ -75,35 +79,49 @@ def is_ball_present(image_gray, cx, cy, tube_width):
     sobely = cv2.Sobel(patch, cv2.CV_64F, 0, 1, ksize=3)
     edge_y = float(np.mean(np.abs(sobely[mask > 0]))) if np.sum(mask > 0) > 0 else 0.0
 
-    return (gray_std >= 20.0 and edge_y >= 11.5)
+    if not (gray_std >= 12.0 and edge_y >= 8.5):
+        return False
+
+    # Filter out empty wood background patches showing minor shadow/grain gradient
+    if len(image.shape) == 3:
+        patch_hsv = cv2.cvtColor(image[y1:y2, x1:x2], cv2.COLOR_BGR2HSV)
+        pts_hsv = patch_hsv[mask > 0]
+        mean_h = float(np.mean(pts_hsv[:, 0]))
+        mean_s = float(np.mean(pts_hsv[:, 1]))
+        mean_v = float(np.mean(pts_hsv[:, 2]))
+        # Wood background has high saturation (S > 100), wood hue (H in [5, 15]), and darker brightness (V < 200)
+        # (Gray mystery balls have very low saturation S <= 35, and real Orange balls have bright V >= 225)
+        if mean_s > 100 and 5 <= mean_h <= 15 and mean_v < 200:
+            return False
+
+    return True
 
 
 def detect_tube_occupancy(image, tube):
     """
     Detect slot positions and occupancy status for a single Tube.
 
-    Evaluates slots from bottom to top enforcing the gravity constraint:
-    balls rest at the bottom of the tube and cannot float in mid-air.
+    Evaluates slots for ball presence and enforces physical gravity consistency:
+    balls rest in a contiguous stack from the bottom of the tube upward.
 
     Returns:
         tuple: (slots, balls_present)
             slots: list of (cx, cy) center coordinates for each slot (top to bottom)
             balls_present: list of bool indicating presence of a ball in each slot
     """
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
     slot_y_coords = compute_tube_slots(tube)
     cx = tube.center[0]
 
     slots = [(cx, cy) for cy in slot_y_coords]
-    balls_present = [False] * len(slots)
+    raw_present = [is_ball_present(image, cx, cy, tube.width) for _, cy in slots]
 
-    # Check from bottom slot to top slot (gravity: balls stack from bottom)
+    # Enforce physical gravity consistency:
+    # A settled tube's balls occupy a contiguous stack from the bottom up.
+    balls_present = [False] * len(slots)
     for idx in range(len(slots) - 1, -1, -1):
-        _, cy = slots[idx]
-        if is_ball_present(gray, cx, cy, tube.width):
+        if raw_present[idx]:
             balls_present[idx] = True
         else:
-            # Empty slot encountered: any slots above must also be empty
             break
 
     return slots, balls_present

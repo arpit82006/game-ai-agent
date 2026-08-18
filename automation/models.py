@@ -23,7 +23,10 @@ class AutomationConfig:
         dry_run (bool): If True, computes and logs taps without sending physical ADB input.
     """
     tap_delay: float = 0.35
+    bonus_tap_delay: float = 0.50
     move_settle_delay: float = 2.80
+    bonus_move_settle_delay: float = 1.20
+    auto_empty_settle_delay: float = 1.50
     verification_delay: float = 0.40
     dry_run: bool = False
 

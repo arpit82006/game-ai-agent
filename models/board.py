@@ -61,8 +61,11 @@ class TubeState:
     @property
     def is_pure(self) -> bool:
         """
-        True if all balls in the tube have the exact same color (or if empty).
+        True if all balls in the tube have the exact same known color (or if empty).
+        Tubes containing GRAY mystery balls are never pure.
         """
+        if any(b == "GRAY" for b in self.balls):
+            return False
         if len(self.balls) <= 1:
             return True
         first = self.balls[0]
@@ -74,6 +77,7 @@ class TubeState:
         A tube is considered solved if:
           1. It is completely empty, OR
           2. It is completely full AND contains only one single uniform color.
+        Tubes with unrevealed GRAY mystery balls are never solved.
         """
         if self.is_empty:
             return True
@@ -179,12 +183,28 @@ class Board:
         return counts
 
     @property
+    def has_mystery_balls(self) -> bool:
+        """True if the board contains unrevealed GRAY mystery balls."""
+        return "GRAY" in self.colors
+
+    @property
+    def mystery_ball_count(self) -> int:
+        """Number of unrevealed GRAY mystery balls on the board."""
+        return self.color_counts.get("GRAY", 0)
+
+    @property
+    def known_ball_count(self) -> int:
+        """Number of revealed known-color balls on the board."""
+        return self.total_balls - self.mystery_ball_count
+
+    @property
     def is_solved(self) -> bool:
         """
         True if all tubes on the board satisfy the solved condition
         (every tube is either empty or full and monochromatic).
+        Boards containing unrevealed GRAY mystery balls are never solved.
         """
-        if not self.tubes or self.total_balls == 0:
+        if not self.tubes or self.total_balls == 0 or self.has_mystery_balls:
             return False
         return all(t.is_solved for t in self.tubes)
 
@@ -232,6 +252,9 @@ class Board:
             "total_balls": self.total_balls,
             "empty_tubes": self.empty_tubes_count,
             "color_counts": self.color_counts,
+            "has_mystery_balls": self.has_mystery_balls,
+            "mystery_balls": self.mystery_ball_count,
+            "known_balls": self.known_ball_count,
             "tubes": [
                 {
                     "id": t.id,
@@ -251,7 +274,7 @@ class Board:
           1. At least 1 tube exists.
           2. Every tube has positive capacity (> 0).
           3. No tube contains more balls than its capacity.
-          4. No invalid/empty/None color strings in active balls.
+          4. No invalid/empty/None/BLACK color strings in active balls.
           5. Positive total ball count.
           6. All color counts > 0.
           7. Total balls do not exceed total board capacity.
@@ -275,8 +298,8 @@ class Board:
                 errors.append(f"Tube {t.id} contains {len(t.balls)} balls, exceeding capacity {t.capacity}.")
 
             for idx, ball in enumerate(t.balls):
-                if not ball or ball.strip() == "" or ball == "EMPTY":
-                    errors.append(f"Tube {t.id} ball at position {idx} has invalid color marker: {repr(ball)}.")
+                if not ball or ball.strip() == "" or ball in ("EMPTY", "BLACK"):
+                    errors.append(f"Tube {t.id} ball at position {idx} has invalid color marker: {repr(ball)}. BLACK/EMPTY must represent empty space, not an active ball.")
 
         if self.total_balls == 0:
             errors.append("Board contains zero balls (entire board is empty).")
@@ -292,6 +315,9 @@ class Board:
         """
         Construct a Board from plain nested lists of color names.
 
+        Empty space markers 'BLACK' and 'EMPTY' are treated as empty slots.
+        Mystery balls 'GRAY' are treated as occupied balls with hidden color.
+
         Args:
             lists: Nested sequence where each sub-sequence lists balls from TOP to BOTTOM.
             capacities: Single int capacity for all tubes, or list of per-tube capacities.
@@ -305,7 +331,7 @@ class Board:
                 cap = int(capacities)
             else:
                 cap = capacities[i - 1] if i - 1 < len(capacities) else 4
-            active_balls = [str(c) for c in b_list if c and c != "EMPTY"]
+            active_balls = [str(c) for c in b_list if c and c not in ("EMPTY", "BLACK")]
             tubes.append(TubeState(id=i, capacity=cap, balls=active_balls))
         return cls(tubes=tubes)
 
