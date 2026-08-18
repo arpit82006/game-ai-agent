@@ -42,13 +42,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.adb import Emulator, ADB_PATH
 from vision.pipeline import run_vision_pipeline, VisionResult
+from solver import solve, validate_and_replay_solution, replay_and_visualize_solution, render_ascii_board
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Ball Sort AI — Vision Pipeline Entry Point")
+    parser = argparse.ArgumentParser(description="Ball Sort AI — Vision Pipeline & Solver Entry Point")
     parser.add_argument("--image", "-i", type=str, default=None, help="Path to static image file (skips live ADB capture)")
     parser.add_argument("--output-dir", "-o", type=str, default="debug/latest", help="Directory for debug output images")
     parser.add_argument("--no-debug", action="store_true", help="Disable writing debug images to disk")
+    parser.add_argument("--no-solve", action="store_true", help="Skip running the solver after vision analysis")
+    parser.add_argument("--verbose-solver", "-v", action="store_true", help="Enable verbose search diagnostics and step-by-step in-memory board replay")
     args = parser.parse_args()
 
     print("\n" + "=" * 55)
@@ -179,9 +182,65 @@ def main() -> int:
 
     print("\n" + "=" * 55)
     print("  VISION COMPLETE")
-    print("=" * 55 + "\n")
+    print("=" * 55)
 
-    return 0 if is_valid else 1
+    if not is_valid:
+        print(f"\n[ERROR] Board validation failed. Cannot proceed to solver.")
+        return 1
+
+    if args.no_solve:
+        print("\n[INFO] Solver skipped (--no-solve requested).\n")
+        return 0
+
+    # ── Stage 9: Solve Puzzle
+    print("\n" + "=" * 55)
+    print("  SOLVER PIPELINE")
+    print("=" * 55)
+    print("\n[9/9] Solving puzzle using Breadth-First Search (BFS)...")
+
+    if args.verbose_solver:
+        print("\n  Initial Board ASCII Representation:")
+        print(render_ascii_board(board))
+
+    solver_result = solve(
+        board,
+        verbose=args.verbose_solver,
+        progress_interval=500
+    )
+
+    if solver_result.solved:
+        print(f"      STATUS: SOLVED")
+        print(f"      Moves: {solver_result.move_count}")
+        print(f"      States Explored: {solver_result.states_explored:,}")
+        print(f"      Solve Time: {solver_result.elapsed_time:.4f}s")
+
+        # Verify solution with step-by-step replay
+        replay_ok, replay_msg, _ = validate_and_replay_solution(board, solver_result.moves)
+        print(f"      Replay Validation: {'PASS' if replay_ok else 'FAIL'}")
+
+        print("\n" + "=" * 55)
+        print(f"  SOLUTION MOVE SEQUENCE ({solver_result.move_count} moves)")
+        print("=" * 55)
+
+        for i, move in enumerate(solver_result.moves, start=1):
+            print(f"  Move {i:2d}: Tube {move.from_tube:2d} -> Tube {move.to_tube:2d} | {move.color:<14s} x{move.ball_count}")
+
+        if args.verbose_solver:
+            print("\n" + "-" * 55)
+            print("  EXECUTING IN-MEMORY DIAGNOSTIC REPLAY:")
+            replay_and_visualize_solution(board, solver_result.moves, print_steps=True)
+
+        print("\n" + "=" * 55)
+        print("  SOLVER COMPLETE — READY FOR AUTOMATION")
+        print("=" * 55 + "\n")
+        return 0
+    else:
+        print(f"      STATUS: UNSOLVED")
+        print(f"      States Explored: {solver_result.states_explored:,}")
+        print(f"      Solve Time: {solver_result.elapsed_time:.4f}s")
+        print(f"      Reason: {solver_result.failure_reason}")
+        print("\n" + "=" * 55 + "\n")
+        return 1
 
 
 if __name__ == "__main__":
