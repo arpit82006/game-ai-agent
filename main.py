@@ -7,6 +7,9 @@ Purpose:
 Usage:
     python main.py
     python main.py --image path/to/image.png  (for offline verification)
+    python main.py --dry-run
+    python main.py --execute-one
+    python main.py --execute
 
 Workflow:
     Find BlueStacks
@@ -29,7 +32,9 @@ Workflow:
           ↓
     Generate visual debug suite (debug/latest/)
           ↓
-    Print formatted board state
+    Solve puzzle using BFS Solver
+          ↓
+    Execute solution via ADB tap automation (optional/interactive)
 """
 
 import sys
@@ -37,21 +42,30 @@ import os
 import argparse
 import cv2
 
-# Ensure project root is in sys.path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 from core.adb import Emulator, ADB_PATH
 from vision.pipeline import run_vision_pipeline, VisionResult
-from solver import solve, validate_and_replay_solution, replay_and_visualize_solution, render_ascii_board
+from solver import solve, validate_and_replay_solution, replay_and_visualize_solution, render_ascii_board, apply_move
+from automation import (
+    AutomationConfig,
+    execute_move,
+    run_full_execution,
+    get_tube_tap_point,
+    find_tube_by_id,
+    verify_post_move,
+    compare_boards
+)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Ball Sort AI — Vision Pipeline & Solver Entry Point")
+    parser = argparse.ArgumentParser(description="Ball Sort AI — Vision, Solver & Automation Entry Point")
     parser.add_argument("--image", "-i", type=str, default=None, help="Path to static image file (skips live ADB capture)")
     parser.add_argument("--output-dir", "-o", type=str, default="debug/latest", help="Directory for debug output images")
     parser.add_argument("--no-debug", action="store_true", help="Disable writing debug images to disk")
     parser.add_argument("--no-solve", action="store_true", help="Skip running the solver after vision analysis")
     parser.add_argument("--verbose-solver", "-v", action="store_true", help="Enable verbose search diagnostics and step-by-step in-memory board replay")
+    parser.add_argument("--dry-run", action="store_true", help="Calculate tap coordinates and simulate moves without sending physical ADB taps")
+    parser.add_argument("--execute-one", action="store_true", help="Execute Move 1 physically via ADB, verify post-move state, and stop")
+    parser.add_argument("--execute", action="store_true", help="Execute full move sequence via ADB with step-by-step post-move verification")
     args = parser.parse_args()
 
     print("\n" + "=" * 55)
@@ -231,9 +245,99 @@ def main() -> int:
             replay_and_visualize_solution(board, solver_result.moves, print_steps=True)
 
         print("\n" + "=" * 55)
-        print("  SOLVER COMPLETE — READY FOR AUTOMATION")
-        print("=" * 55 + "\n")
-        return 0
+        print("  SOLVER COMPLETE")
+        print("=" * 55)
+
+        # ── Stage 10: Automation (Optional)
+        if args.dry_run:
+            print("\n" + "=" * 55)
+            print("  AUTOMATION — DRY RUN (SIMULATED SCREEN TAPS)")
+            print("=" * 55)
+            cfg = AutomationConfig(dry_run=True)
+            current_sim_b = board.copy()
+            for i, move in enumerate(solver_result.moves, start=1):
+                ok, msg, src_pt, dst_pt = execute_move(move, result.tubes, config=cfg)
+                current_sim_b = apply_move(current_sim_b, move)
+                print(f"  Step {i:2d}: {msg}")
+            print("\n" + "=" * 55)
+            print("  DRY RUN FINISHED — ZERO PHYSICAL TAPS DISPATCHED")
+            print("=" * 55 + "\n")
+            return 0
+
+        if args.execute_one:
+            print("\n" + "=" * 55)
+            print("  AUTOMATION — EXECUTE MOVE 1 & POST-MOVE VERIFY")
+            print("=" * 55)
+            if not solver_result.moves:
+                print("  No moves to execute (puzzle already solved).")
+                return 0
+
+            if args.image:
+                print("[ERROR] Cannot execute physical moves in static image mode. Run without --image.")
+                return 1
+
+            move_1 = solver_result.moves[0]
+            expected_board_after_1 = apply_move(board, move_1)
+
+            src_t = find_tube_by_id(result.tubes, move_1.from_tube)
+            dst_t = find_tube_by_id(result.tubes, move_1.to_tube)
+            src_pt = get_tube_tap_point(src_t) if src_t else (0, 0)
+            dst_pt = get_tube_tap_point(dst_t) if dst_t else (0, 0)
+
+            print(f"  Move 1 Action                   : {move_1}")
+            print(f"  Source Tube {move_1.from_tube:2d} Tap Point (X, Y)  : {src_pt}")
+            print(f"  Destination Tube {move_1.to_tube:2d} Tap Point     : {dst_pt}")
+            print("\n  Expected Board State After Move 1:")
+            print(render_ascii_board(expected_board_after_1))
+
+            cfg = AutomationConfig(dry_run=False)
+            print("\n  [1/3] Dispatching physical touch taps via ADB...")
+            ok, msg, _, _ = execute_move(move_1, result.tubes, config=cfg, emulator=emulator)
+            if not ok:
+                print(f"\n[ERROR] Move execution failed: {msg}")
+                return 1
+            print(f"        OK ({msg})")
+
+            print("  [2/3] Capturing post-move screen & running vision verification...")
+            is_verified, v_msg, actual_b, new_tubes = verify_post_move(expected_board_after_1, emulator=emulator, config=cfg)
+
+            print("  [3/3] Comparing theoretical expected vs perceived actual board:")
+            if actual_b:
+                print(render_ascii_board(actual_b, title="Actual Board Perceived by Vision"))
+
+            if is_verified:
+                print("\n  =======================================================")
+                print("    MOVE 1 VERIFICATION: PASS")
+                print("    (Actual board matches theoretical expected state 100%)")
+                print("  =======================================================\n")
+                return 0
+            else:
+                print(f"\n[MISMATCH] {v_msg}")
+                print("Automation stopped safely to prevent unaligned moves.\n")
+                return 1
+
+        # In static image mode, physical execution cannot run
+        if args.image:
+            print("\n  [INFO] Static image mode complete. Physical execution requires a live BlueStacks connection.\n")
+            return 0
+
+        # Determine approval
+        if args.execute:
+            approved = True
+        else:
+            try:
+                prompt = input("\nExecute the complete solution on BlueStacks? [y/N]: ").strip().lower()
+                approved = prompt in ("y", "yes")
+            except (EOFError, KeyboardInterrupt):
+                approved = False
+
+        if approved:
+            cfg = AutomationConfig(dry_run=False)
+            report = run_full_execution(board, result.tubes, solver_result.moves, config=cfg, emulator=emulator)
+            return 0 if report.success else 1
+        else:
+            print("\nExecution cancelled by user. Zero physical taps dispatched.\n")
+            return 0
     else:
         print(f"      STATUS: UNSOLVED")
         print(f"      States Explored: {solver_result.states_explored:,}")
