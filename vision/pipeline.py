@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 
 from models.tube import Tube
+from models.board import Board
 from vision.detect_tubes import detect_tubes
 from vision.detect_ball_slots import detect_tube_occupancy
 from vision.detect_colors import get_ball_color, classify_color, COLOR_BGR_MAP
@@ -45,6 +46,7 @@ class VisionResult:
     image: np.ndarray
     tubes: list[Tube]
     board_state: list[list[str]]
+    board: Board = None
     total_tubes: int = 0
     total_balls: int = 0
     empty_tubes: int = 0
@@ -227,10 +229,14 @@ def run_vision_pipeline(image: np.ndarray, debug_dir: str = "debug/latest", save
             legacy_path = os.path.join("debug", legacy_name)
             cv2.imwrite(legacy_path, img_data)
 
+    # ── Stage 8: Formal Board Model Construction
+    board = Board.from_vision_tubes(tubes)
+
     return VisionResult(
         image=image,
         tubes=tubes,
         board_state=board_state,
+        board=board,
         total_tubes=len(tubes),
         total_balls=total_balls,
         empty_tubes=empty_tubes_count,

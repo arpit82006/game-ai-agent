@@ -142,16 +142,19 @@ def main() -> int:
 
     # ── Display Structured Board State
     print("\n" + "=" * 55)
-    print("  CURRENT BOARD STATE")
+    print("  VALIDATED BOARD STATE")
     print("=" * 55)
 
-    for i, tube in enumerate(result.tubes):
-        active_balls = [c for c in tube.balls if c != "EMPTY"]
-        if not active_balls:
-            print(f"  Tube {tube.id:2d}: [EMPTY TUBE]  (Capacity: {tube.capacity} slots)")
+    board = result.board
+    is_valid, validation_errors = board.validate() if board else (False, ["Board not constructed"])
+
+    for tube in (board.tubes if board else []):
+        if tube.is_empty:
+            print(f"  Tube {tube.id:2d} (capacity {tube.capacity}): [EMPTY TUBE]")
         else:
-            empty_slots = tube.capacity - len(active_balls)
-            print(f"  Tube {tube.id:2d}: {active_balls}  ({len(active_balls)}/{tube.capacity} balls, {empty_slots} empty)")
+            balls_str = " -> ".join(tube.balls)
+            empty_s = tube.available_space
+            print(f"  Tube {tube.id:2d} (capacity {tube.capacity}): [TOP] {balls_str} [BOTTOM]  ({tube.ball_count}/{tube.capacity} balls, {empty_s} empty)")
 
     print("\n" + "-" * 55)
     print(f"  Summary:")
@@ -163,8 +166,11 @@ def main() -> int:
     color_summary = ", ".join(f"{col} ({cnt})" for col, cnt in sorted(result.colors_detected.items()))
     print(f"    Colors Found : {color_summary}")
 
-    print(f"\n  Raw Data Structure:")
-    print(f"    board_state = {result.board_state}")
+    val_status = "PASS" if is_valid else f"FAIL ({'; '.join(validation_errors)})"
+    print(f"    Validation   : {val_status}")
+
+    print(f"\n  Raw Data Structure (TOP -> BOTTOM):")
+    print(f"    board_state = {board.to_lists() if board else result.board_state}")
 
     if not args.no_debug:
         print(f"\n  Visual Debug Assets:")
@@ -175,7 +181,7 @@ def main() -> int:
     print("  VISION COMPLETE")
     print("=" * 55 + "\n")
 
-    return 0
+    return 0 if is_valid else 1
 
 
 if __name__ == "__main__":
