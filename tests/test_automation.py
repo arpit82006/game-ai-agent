@@ -50,12 +50,13 @@ class TestAutomationGeometry(unittest.TestCase):
         )
         self.tubes = [self.tube1, self.tube2]
 
-    def test_tap_delay_defaults(self):
+    def test_normal_and_bonus_tap_delay_defaults(self):
         cfg = AutomationConfig()
         self.assertEqual(cfg.tap_delay, 0.35, "Normal level tap_delay must remain exactly 0.35s")
-        self.assertEqual(cfg.move_settle_delay, 2.80, "Normal level move_settle_delay must be 2.80s")
-        self.assertEqual(cfg.verification_delay, 0.40)
-        self.assertFalse(cfg.dry_run)
+        self.assertEqual(cfg.bonus_tap_delay, 0.50, "Bonus level bonus_tap_delay must be 0.50s")
+        self.assertEqual(cfg.bonus_move_settle_delay, 1.20, "Bonus level settle delay must be 1.20s")
+        self.assertEqual(cfg.auto_empty_settle_delay, 1.50, "Auto-empty settle delay must be 1.50s")
+        self.assertEqual(cfg.move_settle_delay, 2.80, "Normal level settle delay must remain 2.80s")
 
     def test_get_tube_tap_point(self):
         pt = get_tube_tap_point(self.tube1)
@@ -163,6 +164,24 @@ class TestBoardComparison(unittest.TestCase):
         self.assertFalse(is_match)
         self.assertTrue(any("Tube count mismatch" in m for m in mismatches))
 
+    def test_completed_tube_cork_occlusion_reconciliation(self):
+        # Expected: Tube 8 is completed monochromatic [GREEN x4]
+        # Actual perceived: Tube 8 has [GREEN x3] due to top-slot cork occlusion
+        exp = Board.from_lists([
+            ["RED", "BLUE", "YELLOW"],
+            ["GREEN", "GREEN", "GREEN", "GREEN"],
+            []
+        ], capacities=4)
+        act = Board.from_lists([
+            ["RED", "BLUE", "YELLOW"],
+            ["GREEN", "GREEN", "GREEN"],
+            []
+        ], capacities=4)
+
+        is_match, mismatches = compare_boards(exp, act)
+        self.assertTrue(is_match, f"Completed tube cork occlusion must be reconciled safely: {mismatches}")
+        self.assertEqual(mismatches, [])
+
 
 class TestFullExecutionFlow(unittest.TestCase):
     def setUp(self):
@@ -252,6 +271,46 @@ class TestFullExecutionFlow(unittest.TestCase):
         # Only Move 1 was tapped before halting
         self.assertEqual(len(dummy_em.taps), 2)
         self.assertIn("Simulated board mismatch", report.abort_reason)
+
+    def test_stable_tubes_passed_to_verification_and_never_reindexed(self):
+        # 7-tube level with 25 balls (capacity 5)
+        initial_board = Board.from_lists([
+            ["GREEN", "GREEN", "GREEN", "GREEN"],       # Tube 1: 4 green, will receive 5th
+            ["GREEN", "ORANGE", "RED", "LIGHT_BLUE"],   # Tube 2
+            ["DARK_PURPLE", "LIGHT_BLUE", "RED", "LIGHT_BLUE"],
+            ["ORANGE", "ORANGE", "DARK_PURPLE", "ORANGE", "RED"], # Tube 4
+            ["LIGHT_BLUE", "LIGHT_BLUE"],
+            ["DARK_PURPLE", "DARK_PURPLE", "DARK_PURPLE"],
+            []                                          # Tube 7: empty
+        ], capacities=5)
+
+        tubes_7 = [
+            Tube(id=i, x=50 + i * 90, y=285 if i <= 4 else 689, width=84, height=305, area=25620, contour=None)
+            for i in range(1, 8)
+        ]
+
+        moves = [
+            Move(from_tube=2, to_tube=1, ball_count=1, color="GREEN"),  # Move 1: completes Tube 1 with 5 GREEN
+            Move(from_tube=4, to_tube=2, ball_count=1, color="ORANGE")  # Move 2: unrelated move
+        ]
+        dummy_em = DummyEmulator()
+
+        # Mock verify_post_move to return the expected board each time with stable_tubes
+        call_stable_tubes = []
+        def mock_verify_call(expected_b, emulator=None, config=None, stable_tubes=None):
+            call_stable_tubes.append(stable_tubes)
+            return True, "OK", expected_b, stable_tubes
+
+        with patch("automation.verifier.verify_post_move", side_effect=mock_verify_call), \
+             patch("automation.verifier.verify_final_state", return_value=(True, "SOLVED_BOARD", "Cleared")):
+            report = run_full_execution(initial_board, tubes_7, moves, config=self.config, emulator=dummy_em)
+
+        self.assertTrue(report.success)
+        self.assertEqual(report.moves_executed, 2)
+        # Verify that stable_tubes was passed to verify_post_move
+        self.assertEqual(len(call_stable_tubes), 1)
+        self.assertEqual(len(call_stable_tubes[0]), 7, "Must pass all 7 stable tubes to verification")
+        self.assertEqual([t.id for t in call_stable_tubes[0]], [1, 2, 3, 4, 5, 6, 7], "Tube IDs must remain 1..7")
 
 
 if __name__ == "__main__":

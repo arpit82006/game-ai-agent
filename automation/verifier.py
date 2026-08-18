@@ -24,6 +24,12 @@ def compare_boards(expected: Board, actual: Board) -> tuple[bool, list[str]]:
       3. Global color distribution.
       4. Exact top-to-bottom ball stack equality for every individual tube.
 
+    Safe Completed-Tube Reconciliation:
+      If a tube is full and monochromatic in expected state, and actual vision
+      perceives identical monochromatic balls matching the expected stack except
+      the topmost slot is visually occluded by an in-game cork/celebration effect,
+      that completed tube is verified safely.
+
     Args:
         expected (Board): Theoretical board state after move simulation.
         actual (Board): Real board state detected by the vision pipeline.
@@ -36,13 +42,8 @@ def compare_boards(expected: Board, actual: Board) -> tuple[bool, list[str]]:
     if expected.num_tubes != actual.num_tubes:
         mismatches.append(f"Tube count mismatch: expected {expected.num_tubes}, got {actual.num_tubes}")
 
-    if expected.total_balls != actual.total_balls:
-        mismatches.append(f"Total ball count mismatch: expected {expected.total_balls}, got {actual.total_balls}")
-
-    if expected.color_counts != actual.color_counts:
-        mismatches.append(f"Color distribution mismatch: expected {expected.color_counts}, got {actual.color_counts}")
-
-    # Check each tube's contents
+    # Check each tube's contents and handle completed-tube cork occlusion safely
+    occluded_tubes = set()
     for exp_t in expected.tubes:
         try:
             act_t = actual.get_tube(exp_t.id)
@@ -51,6 +52,19 @@ def compare_boards(expected: Board, actual: Board) -> tuple[bool, list[str]]:
             continue
 
         if exp_t.balls != act_t.balls:
+            # Check for completed-tube top-slot visual occlusion (e.g. 4/4 green perceived as 3/4 green due to cork)
+            if (
+                exp_t.is_full
+                and exp_t.is_pure
+                and len(exp_t.balls) >= 3
+                and len(act_t.balls) == len(exp_t.balls) - 1
+                and act_t.is_pure
+                and len(act_t.balls) > 0
+                and act_t.balls[0] == exp_t.balls[0]
+            ):
+                occluded_tubes.add(exp_t.id)
+                continue
+
             exp_str = " -> ".join(exp_t.balls) if exp_t.balls else "EMPTY"
             act_str = " -> ".join(act_t.balls) if act_t.balls else "EMPTY"
             mismatches.append(
@@ -59,6 +73,14 @@ def compare_boards(expected: Board, actual: Board) -> tuple[bool, list[str]]:
                 f"    Actual  : [{act_str}]"
             )
 
+    # Reconcile expected ball count / color counts if completed tubes have top-slot cork occlusion
+    adjusted_actual_balls = actual.total_balls + len(occluded_tubes)
+    if expected.total_balls != actual.total_balls and expected.total_balls != adjusted_actual_balls:
+        mismatches.append(f"Total ball count mismatch: expected {expected.total_balls}, got {actual.total_balls}")
+
+    if not occluded_tubes and expected.color_counts != actual.color_counts:
+        mismatches.append(f"Color distribution mismatch: expected {expected.color_counts}, got {actual.color_counts}")
+
     is_match = (len(mismatches) == 0)
     return is_match, mismatches
 
@@ -66,19 +88,22 @@ def compare_boards(expected: Board, actual: Board) -> tuple[bool, list[str]]:
 def verify_post_move(
     expected_board: Board,
     emulator: Emulator | None = None,
-    config: AutomationConfig | None = None
+    config: AutomationConfig | None = None,
+    stable_tubes: list[Tube] | None = None
 ) -> tuple[bool, str, Board | None, list[Tube]]:
     """
-    Capture a fresh screenshot, run the vision pipeline, and verify the resulting board.
+    Capture a fresh screenshot, run the vision pipeline with stable tube geometry,
+    and verify the resulting board state.
 
     Args:
         expected_board (Board): The simulated expected board state.
         emulator (Emulator | None): Active emulator interface instance.
         config (AutomationConfig | None): Automation timing settings.
+        stable_tubes (list[Tube] | None): Authoritative frozen tube geometries.
 
     Returns:
         tuple[bool, str, Board | None, list[Tube]]:
-            (is_verified, status_message, actual_board, actual_detected_tubes)
+            (is_verified, status_message, actual_board, actual_tubes)
     """
     cfg = config or AutomationConfig()
     em = emulator or Emulator()
@@ -89,12 +114,12 @@ def verify_post_move(
     try:
         image, _ = em.capture_screenshot()
     except Exception as e:
-        return False, f"Post-move screenshot capture failed: {e}", None, []
+        return False, f"Post-move screenshot capture failed: {e}", None, stable_tubes or []
 
     try:
-        vision_result = run_vision_pipeline(image, save_debug=False)
+        vision_result = run_vision_pipeline(image, save_debug=False, stable_tubes=stable_tubes)
     except Exception as e:
-        return False, f"Post-move vision pipeline execution failed: {e}", None, []
+        return False, f"Post-move vision pipeline execution failed: {e}", None, stable_tubes or []
 
     actual_board = vision_result.board
     if actual_board is None:
@@ -108,7 +133,7 @@ def verify_post_move(
     time.sleep(0.60)
     try:
         retry_image, _ = em.capture_screenshot()
-        retry_res = run_vision_pipeline(retry_image, save_debug=False)
+        retry_res = run_vision_pipeline(retry_image, save_debug=False, stable_tubes=stable_tubes)
         if retry_res.board:
             retry_match, retry_mismatches = compare_boards(expected_board, retry_res.board)
             if retry_match:
@@ -143,6 +168,7 @@ def verify_final_state(
     expected_board: Board,
     emulator: Emulator | None = None,
     config: AutomationConfig | None = None,
+    stable_tubes: list[Tube] | None = None,
     max_attempts: int = 3,
     retry_delay: float = 0.75
 ) -> tuple[bool, str, str]:
@@ -174,7 +200,7 @@ def verify_final_state(
 
         # 1. Check if the solved board is directly readable and matching
         try:
-            res = run_vision_pipeline(image, save_debug=False)
+            res = run_vision_pipeline(image, save_debug=False, stable_tubes=stable_tubes)
             if res.board:
                 is_match, _ = compare_boards(expected_board, res.board)
                 if is_match or res.board.is_solved:

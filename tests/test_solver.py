@@ -268,15 +268,97 @@ class TestSolver(unittest.TestCase):
         # Verify final step is solved
         self.assertTrue(history[-1].is_solved)
 
-    def test_verbose_and_trace_solver_diagnostics(self):
-        # Ensure verbose=True and trace=True run without throwing any exceptions
+    def test_canonical_state_key_symmetry_and_capacities(self):
+        from solver.search import canonical_state_key
+
+        # Case 1: Swapping identical empty tubes produces the same canonical key
+        b1 = Board.from_lists([["RED"], [], []], capacities=4)
+        b2 = Board.from_lists([["RED"], [], []], capacities=4)
+        self.assertEqual(canonical_state_key(b1), canonical_state_key(b2))
+
+        # Case 2: Swapping equal-capacity tubes with different contents produces identical canonical key
+        b_perm1 = Board.from_lists([["RED", "BLUE"], ["GREEN"], []], capacities=4)
+        b_perm2 = Board.from_lists([["GREEN"], ["RED", "BLUE"], []], capacities=4)
+        self.assertEqual(canonical_state_key(b_perm1), canonical_state_key(b_perm2))
+
+        # Case 3: Tubes of DIFFERENT capacity produce DIFFERENT keys even if contents match
+        b_cap3 = Board.from_lists([["RED"], []], capacities=[3, 4])
+        b_cap4 = Board.from_lists([["RED"], []], capacities=[4, 3])
+        self.assertNotEqual(canonical_state_key(b_cap3), canonical_state_key(b_cap4))
+
+    def test_solve_9_tube_28_ball_level(self):
         board = Board.from_lists([
-            ["RED", "BLUE"],
-            ["BLUE", "RED"],
-            []
-        ], capacities=2)
-        result = solve(board, verbose=True, trace=True, progress_interval=1)
+            ['PINK', 'GREEN', 'DARK_PURPLE', 'GREEN'],
+            ['PINK', 'DARK_PURPLE', 'ORANGE', 'LIGHT_BLUE'],
+            ['GREEN', 'PINK', 'RED', 'PINK'],
+            ['RED', 'ORANGE', 'RED', 'DARK_PURPLE'],
+            ['RED', 'LIGHT_BLUE', 'ORANGE', 'LIGHT_BLUE'],
+            ['ORANGE', 'DARK_PURPLE', 'GREEN', 'YELLOW'],
+            ['LIGHT_BLUE', 'YELLOW', 'YELLOW', 'YELLOW'],
+            [], []
+        ], capacities=4)
+
+        result = solve(board, timeout=10.0)
         self.assertTrue(result.solved)
+        self.assertLess(result.states_explored, 15000)
+        self.assertLess(result.elapsed_time, 10.0)
+
+        # Ensure real tube IDs are used and solution replays to solved state
+        ok, msg, final_b = validate_and_replay_solution(board, result.moves)
+        self.assertTrue(ok, msg)
+        self.assertTrue(final_b.is_solved)
+
+    def test_solver_pauses_on_mystery_balls(self):
+        bonus_board = Board.from_lists([
+            ["YELLOW", "GRAY", "GRAY", "GRAY"],
+            ["GREEN", "GRAY", "GRAY", "GRAY"],
+            [],
+            []
+        ], capacities=4)
+        result = solve(bonus_board)
+        self.assertFalse(result.solved)
+        self.assertEqual(result.states_explored, 0)
+        self.assertIn("MYSTERY BALLS PRESENT", result.failure_reason)
+
+    def test_move_generator_rejects_gray_matching(self):
+        from solver.move_generator import get_valid_moves
+        # Tube 1 and Tube 2 both have top ball GRAY. They should NOT generate a pour into each other!
+        board = Board.from_lists([
+            ["GRAY", "PINK"],
+            ["GRAY", "GREEN"],
+            []
+        ], capacities=4)
+        moves = get_valid_moves(board)
+        # Check that no move moves GRAY into a non-empty tube
+        for m in moves:
+            dst_tube = board.get_tube(m.to_tube)
+            if not dst_tube.is_empty:
+                self.assertNotEqual(m.color, "GRAY")
+
+    def test_solve_20_ball_mixed_capacity_5_5_5_5_5_4_level(self):
+        # Exact level from normal gameplay: 4 tubes of 5 balls, 1 empty 5-cap tube, 1 empty 4-cap tube
+        board = Board.from_lists([
+            ['YELLOW', 'YELLOW', 'YELLOW', 'GREEN', 'LIGHT_BLUE'],
+            ['DARK_PURPLE', 'LIGHT_BLUE', 'DARK_PURPLE', 'GREEN', 'YELLOW'],
+            ['GREEN', 'LIGHT_BLUE', 'DARK_PURPLE', 'YELLOW', 'DARK_PURPLE'],
+            ['GREEN', 'LIGHT_BLUE', 'DARK_PURPLE', 'LIGHT_BLUE', 'GREEN'],
+            [],
+            []
+        ], capacities=[5, 5, 5, 5, 5, 4])
+
+        is_valid, errors = board.validate()
+        self.assertTrue(is_valid, errors)
+        self.assertEqual(board.total_balls, 20)
+
+        result = solve(board, timeout=10.0)
+        self.assertTrue(result.solved)
+        self.assertLess(result.elapsed_time, 5.0)
+
+        # Solution replay verification
+        ok, msg, final_b = validate_and_replay_solution(board, result.moves)
+        self.assertTrue(ok, msg)
+        self.assertTrue(final_b.is_solved)
+        self.assertEqual(final_b.total_balls, 20)
 
 
 if __name__ == "__main__":

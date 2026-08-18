@@ -86,8 +86,8 @@ def get_valid_moves(board: Board) -> list[Move]:
                     )
                 )
             else:
-                # Rule 5: Non-empty destination must match source top color
-                if dst.top_color == src_top_color:
+                # Rule 5: Non-empty destination must match source top color (GRAY is mystery, never matches)
+                if dst.top_color == src_top_color and src_top_color != "GRAY":
                     moves.append(
                         Move(
                             from_tube=src.id,

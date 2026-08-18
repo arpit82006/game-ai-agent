@@ -51,6 +51,23 @@ def apply_move(board: Board, move: Move) -> Board:
     return new_board
 
 
+def canonical_state_key(board: Board) -> tuple[tuple[int, tuple[str, ...]], ...]:
+    """
+    Return a canonical, hashable representation of the board state.
+
+    Groups and sorts tubes by (capacity, tuple(balls)) so that isomorphic
+    permutations of equal-capacity tubes are treated as identical states,
+    eliminating combinatorial symmetry explosion during search.
+
+    Args:
+        board (Board): The puzzle board.
+
+    Returns:
+        tuple[tuple[int, tuple[str, ...]], ...]: Canonical immutable state key.
+    """
+    return tuple(sorted((t.capacity, t.to_tuple()) for t in board.tubes))
+
+
 def solve_bfs(
     initial_board: Board,
     max_states: int = 200_000,
@@ -61,6 +78,9 @@ def solve_bfs(
 ) -> SolverResult:
     """
     Find the shortest sequence of moves to solve the puzzle using Breadth-First Search (BFS).
+
+    Uses Canonical State Hashing to deduplicate isomorphic tube permutations while
+    preserving exact physical Tube IDs for all generated and returned moves.
 
     Guarantees the optimal (shortest move-count) solution path.
 
@@ -100,7 +120,19 @@ def solve_bfs(
             failure_reason=f"Invalid initial board: {'; '.join(errors)}"
         )
 
-    # 2. Check if already solved
+    # 2. Check for mystery balls (Bonus Level)
+    if initial_board.has_mystery_balls:
+        elapsed = time.perf_counter() - start_time
+        if verbose or trace:
+            print("  [PAUSED] Mystery balls (GRAY) are present. The board is only partially revealed.")
+        return SolverResult(
+            solved=False,
+            states_explored=0,
+            elapsed_time=elapsed,
+            failure_reason="SOLVER PAUSED — MYSTERY BALLS PRESENT: Board contains unrevealed mystery balls (GRAY). Progressive revealing required."
+        )
+
+    # 3. Check if already solved
     if initial_board.is_solved:
         elapsed = time.perf_counter() - start_time
         if verbose or trace:
@@ -113,16 +145,14 @@ def solve_bfs(
             elapsed_time=elapsed
         )
 
-    # 3. Initialize BFS structures
-    initial_key = initial_board.to_state_tuple()
-    queue: deque[tuple[Board, tuple[tuple[str, ...], ...]]] = deque([(initial_board, initial_key)])
-    visited_states: set[tuple[tuple[str, ...], ...]] = {initial_key}
-
-    # parent_map: child_state_key -> (parent_state_key, move_taken)
-    parent_map: dict[tuple[tuple[str, ...], ...], tuple[tuple[tuple[str, ...], ...], Move]] = {}
+    # 3. Initialize BFS structures with Canonical Hashing
+    initial_key = canonical_state_key(initial_board)
+    # Queue entries: (current_board, parent_node_ref, move_taken)
+    queue: deque[tuple[Board, tuple | None, Move | None]] = deque([(initial_board, None, None)])
+    visited_states: set[tuple[tuple[int, tuple[str, ...]], ...]] = {initial_key}
 
     states_explored = 0
-    solved_key: tuple[tuple[str, ...], ...] | None = None
+    solved_node: tuple[Board, tuple | None, Move | None] | None = None
 
     if verbose or trace:
         print(f"  [Search Start] Max states: {max_states:,} | Timeout: {timeout:.1f}s")
@@ -152,7 +182,7 @@ def solve_bfs(
                 failure_reason=f"Search timed out after {timeout:.1f}s ({states_explored:,} states explored)."
             )
 
-        current_board, current_key = queue.popleft()
+        current_board, parent_ref, move_taken = queue.popleft()
         states_explored += 1
 
         if verbose and (states_explored % progress_interval == 0 or states_explored == 1):
@@ -160,42 +190,43 @@ def solve_bfs(
             print(f"  [Search] Explored: {states_explored:6,d} | Queue: {len(queue):6,d} | Visited: {len(visited_states):6,d} | Time: {elapsed_now:6.3f}s")
 
         if current_board.is_solved:
-            solved_key = current_key
+            solved_node = (current_board, parent_ref, move_taken)
             break
 
-        # Generate and explore successor states
+        current_node_ref = (parent_ref, move_taken)
+
+        # Generate and explore successor states using real tube IDs
         valid_moves = get_valid_moves(current_board)
 
         if trace:
-            print(f"\n  [State #{states_explored}] {current_key}")
+            print(f"\n  [State #{states_explored}] {canonical_state_key(current_board)}")
             print(f"    Legal moves ({len(valid_moves)}): {', '.join(str(m) for m in valid_moves) if valid_moves else 'None'}")
 
         for move in valid_moves:
             next_board = apply_move(current_board, move)
-            next_key = next_board.to_state_tuple()
+            next_key = canonical_state_key(next_board)
 
             if next_key not in visited_states:
                 visited_states.add(next_key)
-                parent_map[next_key] = (current_key, move)
 
                 if next_board.is_solved:
                     states_explored += 1
-                    solved_key = next_key
+                    solved_node = (next_board, current_node_ref, move)
                     queue.clear()
                     break
 
-                queue.append((next_board, next_key))
+                queue.append((next_board, current_node_ref, move))
 
     elapsed = time.perf_counter() - start_time
 
-    # 5. Reconstruct solution path
-    if solved_key is not None:
+    # 5. Reconstruct solution path from node pointer chain
+    if solved_node is not None:
         solution_moves: list[Move] = []
-        curr = solved_key
-        while curr in parent_map:
-            prev_state, move_taken = parent_map[curr]
-            solution_moves.append(move_taken)
-            curr = prev_state
+        curr = (solved_node[1], solved_node[2])
+        while curr is not None and curr[1] is not None:
+            parent_ref, move = curr
+            solution_moves.append(move)
+            curr = parent_ref
 
         solution_moves.reverse()
 

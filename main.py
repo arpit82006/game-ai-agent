@@ -7,9 +7,6 @@ Purpose:
 Usage:
     python main.py
     python main.py --image path/to/image.png  (for offline verification)
-    python main.py --dry-run
-    python main.py --execute-one
-    python main.py --execute
 
 Workflow:
     Find BlueStacks
@@ -32,9 +29,7 @@ Workflow:
           ↓
     Generate visual debug suite (debug/latest/)
           ↓
-    Solve puzzle using BFS Solver
-          ↓
-    Execute solution via ADB tap automation (optional/interactive)
+    Print formatted board state
 """
 
 import sys
@@ -179,7 +174,7 @@ def main() -> int:
     print(f"    Total Tubes  : {result.total_tubes}")
     print(f"    Total Balls  : {result.total_balls}")
     print(f"    Empty Tubes  : {result.empty_tubes}")
-    
+
     color_summary = ", ".join(f"{col} ({cnt})" for col, cnt in sorted(result.colors_detected.items()))
     print(f"    Colors Found : {color_summary}")
 
@@ -202,15 +197,93 @@ def main() -> int:
         print(f"\n[ERROR] Board validation failed. Cannot proceed to solver.")
         return 1
 
-    if args.no_solve:
-        print("\n[INFO] Solver skipped (--no-solve requested).\n")
-        return 0
+    # ── Game Mode Detection
+    from bonus import is_bonus_level, run_bonus_reveal_loop
 
-    # ── Stage 9: Solve Puzzle
+    if is_bonus_level(board):
+        print("\n" + "=" * 55)
+        print("  GAME MODE: BONUS / MYSTERY LEVEL")
+        print("=" * 55)
+        print(f"  Mystery Balls Remaining : {board.mystery_ball_count}")
+        print(f"  Currently Revealed Balls: {board.known_ball_count}")
+        empty_slots_count = sum(t.available_space for t in board.tubes)
+        print(f"  Empty Slots             : {empty_slots_count}")
+        print("\n  The puzzle requires progressive revealing before it can be solved.")
+        print("  The program will perform reveal moves, capturing a fresh screenshot after each move.")
+        print("=" * 55)
+
+        if args.no_solve:
+            print("\n[INFO] Solver skipped (--no-solve requested).\n")
+            return 0
+
+        from bonus import run_bonus_reveal_loop, run_bonus_reveal_single_step
+
+        if args.image:
+            print("\n  [INFO] Static image mode complete. Progressive revealing requires a live BlueStacks connection.\n")
+            return 0
+
+        print("\n" + "=" * 55)
+        print("  BONUS / MYSTERY LEVEL")
+        print("=" * 55)
+        print(f"  Mystery Balls Remaining: {board.mystery_ball_count}")
+        print(f"  Known Balls            : {board.known_ball_count}")
+        print(f"  Empty Slots            : {sum(t.available_space for t in board.tubes)}")
+        print("\n  The program will progressively reveal the hidden balls.")
+        print("  It will:")
+        print("  - perform one legal reveal move")
+        print("  - capture a fresh screenshot")
+        print("  - verify the new state")
+        print("  - repeat until all mystery balls are revealed")
+        print("=" * 55)
+
+        if args.execute or args.execute_one:
+            approved = True
+        else:
+            try:
+                prompt = input("\nBegin bonus reveal process? [y/N]: ").strip().lower()
+                approved = prompt in ("y", "yes")
+            except (EOFError, KeyboardInterrupt):
+                approved = False
+
+        if not approved:
+            print("\nBonus reveal cancelled by user. Zero physical taps dispatched.\n")
+            return 0
+
+        bonus_cfg = AutomationConfig(
+            dry_run=args.dry_run,
+            bonus_tap_delay=0.50,
+            bonus_move_settle_delay=1.20,
+            auto_empty_settle_delay=1.50
+        )
+
+        if args.execute_one:
+            ok, msg, new_b, _ = run_bonus_reveal_single_step(board, result.tubes, emulator=emulator, config=bonus_cfg)
+            return 0 if ok else 1
+
+        # Production Path: Run full progressive reveal loop until all mystery balls are revealed
+        reveal_report = run_bonus_reveal_loop(board, result.tubes, emulator=emulator, config=bonus_cfg, max_iterations=30)
+        if not reveal_report.success or not reveal_report.final_board:
+            print(f"\n[ERROR] Progressive reveal loop ended without full resolution: {reveal_report.abort_reason}\n")
+            return 1
+
+        # Fully revealed board transitions to Canonical BFS & Normal Automation
+        board = reveal_report.final_board
+        if reveal_report.final_tubes:
+            result.tubes = reveal_report.final_tubes
+    else:
+        print("\n" + "=" * 55)
+        print("  GAME MODE: NORMAL LEVEL")
+        print("=" * 55)
+
+        if args.no_solve:
+            print("\n[INFO] Solver skipped (--no-solve requested).\n")
+            return 0
+
+    # ── Stage 9: Solve Puzzle (Canonical BFS)
     print("\n" + "=" * 55)
     print("  SOLVER PIPELINE")
     print("=" * 55)
-    print("\n[9/9] Solving puzzle using Breadth-First Search (BFS)...")
+    print("\n[9/9] Solving puzzle using Breadth-First Search (Canonical BFS)...")
 
     if args.verbose_solver:
         print("\n  Initial Board ASCII Representation:")
@@ -248,7 +321,7 @@ def main() -> int:
         print("  SOLVER COMPLETE")
         print("=" * 55)
 
-        # ── Stage 10: Automation (Optional)
+        # ── Stage 10: Automation (Optional, default is NON-INTERACTIVE)
         if args.dry_run:
             print("\n" + "=" * 55)
             print("  AUTOMATION — DRY RUN (SIMULATED SCREEN TAPS)")
@@ -299,7 +372,7 @@ def main() -> int:
             print(f"        OK ({msg})")
 
             print("  [2/3] Capturing post-move screen & running vision verification...")
-            is_verified, v_msg, actual_b, new_tubes = verify_post_move(expected_board_after_1, emulator=emulator, config=cfg)
+            is_verified, v_msg, actual_b, new_tubes = verify_post_move(expected_board_after_1, emulator=emulator, config=cfg, stable_tubes=result.tubes)
 
             print("  [3/3] Comparing theoretical expected vs perceived actual board:")
             if actual_b:
@@ -321,7 +394,9 @@ def main() -> int:
             print("\n  [INFO] Static image mode complete. Physical execution requires a live BlueStacks connection.\n")
             return 0
 
-        # Determine approval
+        # Determine approval:
+        # If --execute flag was explicitly supplied, user has requested full execution.
+        # Otherwise, prompt the user ONCE before dispatching any physical ADB taps.
         if args.execute:
             approved = True
         else:
@@ -339,12 +414,15 @@ def main() -> int:
             print("\nExecution cancelled by user. Zero physical taps dispatched.\n")
             return 0
     else:
-        print(f"      STATUS: UNSOLVED")
+        if board and board.has_mystery_balls:
+            print(f"      STATUS: PAUSED (Bonus / Mystery Level)")
+        else:
+            print(f"      STATUS: UNSOLVED")
         print(f"      States Explored: {solver_result.states_explored:,}")
         print(f"      Solve Time: {solver_result.elapsed_time:.4f}s")
         print(f"      Reason: {solver_result.failure_reason}")
         print("\n" + "=" * 55 + "\n")
-        return 1
+        return 0 if (board and board.has_mystery_balls) else 1
 
 
 if __name__ == "__main__":

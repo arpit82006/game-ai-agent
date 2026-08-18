@@ -156,13 +156,14 @@ def run_full_execution(
     print("  AUTOMATION STARTED")
     print("=" * 55)
 
+    import copy
     current_board = initial_board.copy()
-    current_tubes = list(initial_tubes)
+    stable_tubes = [copy.deepcopy(t) for t in initial_tubes]
 
     for step_idx, move in enumerate(moves, start=1):
         expected_board = apply_move(current_board, move)
-        src_t = find_tube_by_id(current_tubes, move.from_tube)
-        dst_t = find_tube_by_id(current_tubes, move.to_tube)
+        src_t = find_tube_by_id(stable_tubes, move.from_tube)
+        dst_t = find_tube_by_id(stable_tubes, move.to_tube)
         src_pt = get_tube_tap_point(src_t) if src_t else (0, 0)
         dst_pt = get_tube_tap_point(dst_t) if dst_t else (0, 0)
 
@@ -171,7 +172,7 @@ def run_full_execution(
         print(f"Source tap     : {src_pt}")
         print(f"Destination tap: {dst_pt}")
 
-        ok, msg, _, _ = execute_move(move, current_tubes, config=cfg, emulator=em)
+        ok, msg, _, _ = execute_move(move, stable_tubes, config=cfg, emulator=em)
         if not ok:
             print(f"Tap result     : FAILED ({msg})")
             print("\n" + "=" * 55)
@@ -190,7 +191,7 @@ def run_full_execution(
         if step_idx == len(moves):
             report.moves_executed = step_idx
             from automation.verifier import verify_final_state
-            is_final_ok, final_state, final_msg = verify_final_state(expected_board, emulator=em, config=cfg)
+            is_final_ok, final_state, final_msg = verify_final_state(expected_board, emulator=em, config=cfg, stable_tubes=stable_tubes)
             if is_final_ok:
                 print(f"Verification   : PASS ({final_state})")
                 print("\n" + "=" * 55)
@@ -222,8 +223,8 @@ def run_full_execution(
                 report.abort_reason = final_msg
                 return report
 
-        # Strict verification for intermediate moves (1 .. N-1)
-        is_verified, v_msg, actual_b, new_tubes = verify_post_move(expected_board, emulator=em, config=cfg)
+        # Strict verification for intermediate moves (1 .. N-1) with frozen stable tube geometry
+        is_verified, v_msg, actual_b, _ = verify_post_move(expected_board, emulator=em, config=cfg, stable_tubes=stable_tubes)
         if not is_verified:
             print(f"Verification   : FAIL")
             print("\n" + "=" * 55)
@@ -245,8 +246,6 @@ def run_full_execution(
         print(f"Verification   : PASS")
         report.moves_executed = step_idx
         current_board = actual_b
-        if new_tubes:
-            current_tubes = new_tubes
 
         if current_board.is_solved:
             print("\n" + "=" * 55)

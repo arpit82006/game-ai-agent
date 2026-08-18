@@ -209,6 +209,200 @@ class TestBoardValidation(unittest.TestCase):
         self.assertIn("NEON_CYAN", board.colors)
         self.assertEqual(board.color_counts["NEON_CYAN"], 3)
 
+    def test_variable_capacities_and_partial_fills_all_states(self):
+        # Capacity 4: 0/4, 1/4, 2/4, 3/4, 4/4
+        t_0_4 = TubeState(id=1, capacity=4, balls=[])
+        t_1_4 = TubeState(id=2, capacity=4, balls=["PINK"])
+        t_2_4 = TubeState(id=3, capacity=4, balls=["PINK", "GREEN"])
+        t_3_4 = TubeState(id=4, capacity=4, balls=["PINK", "GREEN", "BLUE"])
+        t_4_4 = TubeState(id=5, capacity=4, balls=["PINK", "GREEN", "BLUE", "RED"])
+
+        self.assertEqual(t_0_4.ball_count, 0)
+        self.assertEqual(t_1_4.ball_count, 1)
+        self.assertEqual(t_2_4.ball_count, 2)
+        self.assertEqual(t_3_4.ball_count, 3)
+        self.assertEqual(t_4_4.ball_count, 4)
+
+        # Capacity 3: 0/3, 1/3, 2/3, 3/3
+        t_0_3 = TubeState(id=6, capacity=3, balls=[])
+        t_1_3 = TubeState(id=7, capacity=3, balls=["PINK"])
+        t_2_3 = TubeState(id=8, capacity=3, balls=["PINK", "GREEN"])
+        t_3_3 = TubeState(id=9, capacity=3, balls=["PINK", "GREEN", "BLUE"])
+
+        self.assertEqual(t_0_3.ball_count, 0)
+        self.assertEqual(t_1_3.ball_count, 1)
+        self.assertEqual(t_2_3.ball_count, 2)
+        self.assertEqual(t_3_3.ball_count, 3)
+
+        # Mixed capacity 8-tube board
+        mixed_board = Board(tubes=[t_0_4, t_1_4, t_2_4, t_3_4, t_4_4, t_0_3, t_1_3, t_2_3])
+    def test_bonus_level_mystery_balls_and_black_empty_semantics(self):
+        # 1. Fully empty tube using BLACK markers
+        b_empty = Board.from_lists([["BLACK", "BLACK", "BLACK", "BLACK"]], capacities=4)
+        self.assertEqual(b_empty.tubes[0].ball_count, 0)
+        self.assertTrue(b_empty.tubes[0].is_empty)
+
+        # 2. One known ball + 3 gray mystery balls
+        b_1k_3m = Board.from_lists([["PINK", "GRAY", "GRAY", "GRAY"]], capacities=4)
+        self.assertEqual(b_1k_3m.tubes[0].ball_count, 4)
+        self.assertEqual(b_1k_3m.tubes[0].balls, ["PINK", "GRAY", "GRAY", "GRAY"])
+        self.assertTrue(b_1k_3m.has_mystery_balls)
+        self.assertEqual(b_1k_3m.mystery_ball_count, 3)
+        self.assertEqual(b_1k_3m.known_ball_count, 1)
+
+        # 3. Two known balls + 2 gray mystery balls
+        b_2k_2m = Board.from_lists([["PINK", "GREEN", "GRAY", "GRAY"]], capacities=4)
+        self.assertEqual(b_2k_2m.tubes[0].ball_count, 4)
+        self.assertEqual(b_2k_2m.tubes[0].balls, ["PINK", "GREEN", "GRAY", "GRAY"])
+
+        # 4. Three known balls + 1 gray mystery ball
+        b_3k_1m = Board.from_lists([["PINK", "GREEN", "RED", "GRAY"]], capacities=4)
+        self.assertEqual(b_3k_1m.tubes[0].ball_count, 4)
+        self.assertEqual(b_3k_1m.tubes[0].balls, ["PINK", "GREEN", "RED", "GRAY"])
+
+        # 5. Fully known tube
+        b_4k = Board.from_lists([["PINK", "GREEN", "RED", "YELLOW"]], capacities=4)
+        self.assertEqual(b_4k.tubes[0].ball_count, 4)
+        self.assertFalse(b_4k.has_mystery_balls)
+
+        # 6. Fully mystery tube
+        b_4m = Board.from_lists([["GRAY", "GRAY", "GRAY", "GRAY"]], capacities=4)
+        self.assertEqual(b_4m.tubes[0].ball_count, 4)
+        self.assertFalse(b_4m.tubes[0].is_pure)  # Mystery tubes cannot be considered pure
+        self.assertFalse(b_4m.is_solved)
+
+        # 7. Mixed known + mystery + empty states
+        b_partial = Board.from_lists([["PINK", "GRAY", "BLACK", "BLACK"]], capacities=4)
+        self.assertEqual(b_partial.tubes[0].ball_count, 2)
+        self.assertEqual(b_partial.tubes[0].available_space, 2)
+        self.assertEqual(b_partial.tubes[0].balls, ["PINK", "GRAY"])
+
+        # 8. Full Bonus Level Board (5 mystery tubes + 2 empty tubes)
+        bonus_board = Board.from_lists([
+            ["YELLOW", "GRAY", "GRAY", "GRAY"],
+            ["GREEN", "GRAY", "GRAY", "GRAY"],
+            ["RED", "GRAY", "GRAY", "GRAY"],
+            ["PINK", "GRAY", "GRAY", "GRAY"],
+            ["PINK", "GRAY", "GRAY", "GRAY"],
+            [],
+            []
+        ], capacities=4)
+        is_valid, errors = bonus_board.validate()
+        self.assertTrue(is_valid, errors)
+        self.assertEqual(bonus_board.num_tubes, 7)
+        self.assertEqual(bonus_board.total_balls, 20)
+        self.assertEqual(bonus_board.mystery_ball_count, 15)
+        self.assertEqual(bonus_board.known_ball_count, 5)
+        self.assertEqual(bonus_board.empty_tubes_count, 2)
+        self.assertTrue(bonus_board.has_mystery_balls)
+        self.assertFalse(bonus_board.is_solved)
+
+        # 9. BLACK rejection if explicitly inserted into active balls
+        invalid_black_tube = TubeState(id=1, capacity=4, balls=["PINK", "BLACK"])
+        b_bad = Board(tubes=[invalid_black_tube])
+        is_valid, errors = b_bad.validate()
+        self.assertFalse(is_valid)
+        self.assertTrue(any("BLACK/EMPTY" in e for e in errors))
+
+
+class TestMixedAndVariableCapacities(unittest.TestCase):
+    """
+    Unit tests for variable-capacity tubes (capacity 4, capacity 5, mixed 5/4 boards).
+    """
+    def test_capacity_4_matrix(self):
+        # 0/4
+        t0 = TubeState(id=1, capacity=4, balls=[])
+        self.assertTrue(t0.is_empty)
+        self.assertFalse(t0.is_full)
+        self.assertEqual(t0.available_space, 4)
+        self.assertEqual(t0.ball_count, 0)
+        self.assertTrue(t0.is_solved)
+
+        # 1/4
+        t1 = TubeState(id=2, capacity=4, balls=["RED"])
+        self.assertFalse(t1.is_empty)
+        self.assertFalse(t1.is_full)
+        self.assertEqual(t1.available_space, 3)
+        self.assertEqual(t1.ball_count, 1)
+
+        # 2/4
+        t2 = TubeState(id=3, capacity=4, balls=["RED", "RED"])
+        self.assertEqual(t2.available_space, 2)
+        self.assertEqual(t2.ball_count, 2)
+
+        # 3/4
+        t3 = TubeState(id=4, capacity=4, balls=["RED", "RED", "RED"])
+        self.assertEqual(t3.available_space, 1)
+        self.assertEqual(t3.ball_count, 3)
+
+        # 4/4
+        t4 = TubeState(id=5, capacity=4, balls=["RED", "RED", "RED", "RED"])
+        self.assertFalse(t4.is_empty)
+        self.assertTrue(t4.is_full)
+        self.assertEqual(t4.available_space, 0)
+        self.assertEqual(t4.ball_count, 4)
+        self.assertTrue(t4.is_solved)
+
+    def test_capacity_5_matrix(self):
+        # 0/5
+        t0 = TubeState(id=1, capacity=5, balls=[])
+        self.assertTrue(t0.is_empty)
+        self.assertFalse(t0.is_full)
+        self.assertEqual(t0.available_space, 5)
+        self.assertEqual(t0.ball_count, 0)
+        self.assertTrue(t0.is_solved)
+
+        # 1/5
+        t1 = TubeState(id=2, capacity=5, balls=["YELLOW"])
+        self.assertFalse(t1.is_empty)
+        self.assertFalse(t1.is_full)
+        self.assertEqual(t1.available_space, 4)
+        self.assertEqual(t1.ball_count, 1)
+
+        # 2/5
+        t2 = TubeState(id=3, capacity=5, balls=["YELLOW", "YELLOW"])
+        self.assertEqual(t2.available_space, 3)
+        self.assertEqual(t2.ball_count, 2)
+
+        # 3/5
+        t3 = TubeState(id=4, capacity=5, balls=["YELLOW", "YELLOW", "YELLOW"])
+        self.assertEqual(t3.available_space, 2)
+        self.assertEqual(t3.ball_count, 3)
+
+        # 4/5
+        t4 = TubeState(id=5, capacity=5, balls=["YELLOW", "YELLOW", "YELLOW", "YELLOW"])
+        self.assertFalse(t4.is_full)
+        self.assertEqual(t4.available_space, 1)
+        self.assertEqual(t4.ball_count, 4)
+        self.assertFalse(t4.is_solved)
+
+        # 5/5
+        t5 = TubeState(id=6, capacity=5, balls=["YELLOW", "YELLOW", "YELLOW", "YELLOW", "YELLOW"])
+        self.assertTrue(t5.is_full)
+        self.assertEqual(t5.available_space, 0)
+        self.assertEqual(t5.ball_count, 5)
+        self.assertTrue(t5.is_pure)
+        self.assertTrue(t5.is_solved)
+
+    def test_exact_5_5_5_5_5_4_board_model(self):
+        board = Board.from_lists([
+            ['YELLOW', 'YELLOW', 'YELLOW', 'GREEN', 'LIGHT_BLUE'],
+            ['DARK_PURPLE', 'LIGHT_BLUE', 'DARK_PURPLE', 'GREEN', 'YELLOW'],
+            ['GREEN', 'LIGHT_BLUE', 'DARK_PURPLE', 'YELLOW', 'DARK_PURPLE'],
+            ['GREEN', 'LIGHT_BLUE', 'DARK_PURPLE', 'LIGHT_BLUE', 'GREEN'],
+            [],
+            []
+        ], capacities=[5, 5, 5, 5, 5, 4])
+
+        is_valid, errors = board.validate()
+        self.assertTrue(is_valid, errors)
+        self.assertEqual(board.num_tubes, 6)
+        self.assertEqual(board.total_balls, 20)
+        self.assertEqual(board.color_counts, {'YELLOW': 5, 'GREEN': 5, 'LIGHT_BLUE': 5, 'DARK_PURPLE': 5})
+        self.assertEqual([t.capacity for t in board.tubes], [5, 5, 5, 5, 5, 4])
+        self.assertEqual([t.ball_count for t in board.tubes], [5, 5, 5, 5, 0, 0])
+        self.assertEqual([t.available_space for t in board.tubes], [0, 0, 0, 0, 5, 4])
+
 
 if __name__ == "__main__":
     unittest.main()

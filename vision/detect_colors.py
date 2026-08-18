@@ -78,8 +78,12 @@ def classify_color(h, s=255, v=255):
       - PINK:          Bright pastel pink (155 <= H < 170).
 
     Returns:
-        str: Standard color name ('PINK', 'RED', 'ORANGE', 'YELLOW', 'GREEN', 'EMERALD_GREEN', 'LIGHT_BLUE', 'DARK_BLUE', 'DARK_PURPLE', 'MAGENTA').
+        str: Standard color name ('PINK', 'RED', 'ORANGE', 'YELLOW', 'GREEN', 'EMERALD_GREEN', 'LIGHT_BLUE', 'DARK_BLUE', 'DARK_PURPLE', 'MAGENTA', 'GRAY').
     """
+    # Achromatic mystery balls with low saturation are classified as GRAY
+    if s <= 35:
+        return "GRAY"
+
     if h >= 170 or h < 8:
         return "RED"
     elif 8 <= h < 18:
@@ -88,10 +92,14 @@ def classify_color(h, s=255, v=255):
         return "YELLOW"
     elif 38 <= h < 65:
         return "GREEN"
-    elif 65 <= h < 80:
-        return "EMERALD_GREEN"
-    elif 80 <= h < 105:
-        return "LIGHT_BLUE"
+    elif 65 <= h < 105:
+        # In the green/cyan/light-blue spectrum:
+        # EMERALD_GREEN is characterized by high saturation (S >= 220) and rich deep pigment (S > V or V <= 200).
+        # LIGHT_BLUE / Cyan has moderate saturation (S < 220) and high brightness (V >= 200, V > S), or pure blue hue (H >= 90).
+        if h < 90 and s >= 220 and (s > v or v <= 200):
+            return "EMERALD_GREEN"
+        else:
+            return "LIGHT_BLUE"
     elif 105 <= h < 125:
         return "DARK_BLUE"
     elif 125 <= h < 140:
@@ -127,6 +135,8 @@ COLOR_BGR_MAP = {
     "EMERALD_GREEN": (34,  139, 34 ),
     "LIGHT_BLUE":    (235, 180, 50 ),
     "DARK_BLUE":     (180, 50,  0  ),
+    "GRAY":          (160, 160, 160),
+    "BLACK":         (20,  20,  20 ),
     "EMPTY":         (80,  80,  80 ),
     "UNKNOWN":       (128, 128, 128)
 }
@@ -189,4 +199,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()

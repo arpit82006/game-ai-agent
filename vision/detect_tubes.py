@@ -34,11 +34,13 @@ def _modal_value(values, tolerance=0.20):
 def _sort_reading_order(tubes, row_gap):
     """
     Sort tubes in reading order: rows top-to-bottom, left-to-right within
-    each row.  row_gap is the minimum y-difference between tube tops that
-    indicates a new row (typically 40–60% of the median tube height).
+    each row. Also normalizes upward bounding-box distortions caused by corks
+    or celebration effects on completed tubes by aligning each tube's top rim
+    with the row's median physical rim baseline.
     """
     if not tubes:
         return []
+    import numpy as np
     by_y = sorted(tubes, key=lambda t: t.y)
     rows        = []
     current_row = [by_y[0]]
@@ -49,6 +51,18 @@ def _sort_reading_order(tubes, row_gap):
         else:
             current_row.append(tube)
     rows.append(sorted(current_row, key=lambda t: t.x))
+
+    # Normalize cork / celebration top protrusion within each row
+    for row in rows:
+        if len(row) >= 2:
+            true_top = max(t.y for t in row)
+            for tube in row:
+                # If contour starts above row rim by > 12px due to cork topper
+                if tube.y < true_top - 12:
+                    bottom = tube.y + tube.height
+                    tube.y = true_top
+                    tube.height = bottom - true_top
+
     result = []
     for row in rows:
         result.extend(row)
@@ -240,4 +254,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()
