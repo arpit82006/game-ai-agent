@@ -72,8 +72,9 @@ class Emulator:
             text=True
         )
 
-        # Fallback if specific IP fails but emulator is attached
-        if "device not found" in result.stderr.lower() or "error" in result.stderr.lower():
+        # Fallback if specific IP fails but emulator is attached (never retry input tap commands)
+        is_input_cmd = len(command) >= 2 and command[0] == "shell" and command[1] == "input"
+        if not is_input_cmd and ("device not found" in result.stderr.lower() or "device offline" in result.stderr.lower()):
             dev_check = subprocess.run([self.adb_path, "devices"], capture_output=True, text=True)
             lines = [l.split()[0] for l in dev_check.stdout.strip().split("\n")[1:] if l.strip() and "device" in l]
             if lines and lines[0] != self.device:
