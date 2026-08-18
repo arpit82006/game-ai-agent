@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import pyautogui
+# pyrefly: ignore [missing-import]
 from PIL import Image
 
 print("=" * 50)
